@@ -1,0 +1,3324 @@
+# TheDen
+This Repository contains codes and descriptions related to projects that have the permission to stay public. 
+
+#DEMAND FORECASTING OF RETAIL PRODUCTS FULL CODE
+
+rm(list=ls())
+
+#LIBRARIES REQUIRED IN THE CODE
+
+library(Amelia)
+library(forecast)
+library(lubridate)
+library(xts)
+library(data.table)
+library(imputeTS)
+library(mice)
+library(caret)
+library(dplyr)
+library(Hmisc)
+library(caTools)
+library(TTR)
+library(randomForest)
+library(tseries)
+library(DMwR)
+library("ggplot2")
+library("reshape")
+
+#SETTING UP WORKING DIRECTORY AN DREADING THE DATASET IN DATAFRAME
+
+setwd()
+proddata <- read.csv("ProductsData.csv",header= T, sep = ",")
+
+
+#INITIAL STRUCTURE OF THE DATAFRAME
+
+summary(proddata)
+str(proddata)
+unique(proddata$ProductCode)
+
+#PREPROCESSING
+#1.FORMATTING DATE COLUMN AS DATE
+#2.Sorting the data based on prodcode and then date
+#3.CALCULATING THE UNIT PRICE AS EXPECTED BY CLIENT
+#4.REMOVE COLUMNS THAT HAVE QUANTITY < 1
+#5.AGGREGATING THE DATA BASED ON DUPLICATE DATES
+
+proddata$Date <- as.Date(proddata$Date)
+
+
+proddata$UnitPrice <- proddata$Amount / proddata$Quantity
+
+sum(proddata$Quantity<1)
+
+proddata<- proddata[!proddata$Quantity < 1,]
+
+
+proddata <- aggregate(cbind(Amount, Quantity, UnitPrice)~StoreID+ProductCode+Date+ProductType,
+                      data=proddata, max, na.rm=FALSE)
+
+proddata <- proddata[
+  with(proddata, order(ProductCode, Date)),
+  ]
+
+
+#MISSING VALUES CHECK AND 
+
+missmap(proddata, main = "Missing values vs observed")
+
+max(proddata$Date)
+min(proddata$Date)
+
+#DIVIDING THE DATASET FURTHER BASED ON PRODUCT CODES
+
+X <- split(proddata, proddata$ProductCode)
+names(X) <- c("pd1001", "pd1002", "pd1003", "pd1004", "pd1005", "pd1006", "pd1007", "pd1008",
+              "pd1009", "pd1010", "pd1011", "pd1012", "pd1013", "pd1014", "pd1015")
+list2env(X, envir = .GlobalEnv)
+
+#Insert missing dates, assign store id and product code and product type
+#in missing places 
+#
+#alldates <- data.table(Date=seq.Date(min(pd1001$Date), max(pd1001$Date), by="day"))
+#pd1001 <- merge(pd1001, alldates, by="Date", all=TRUE)
+#pd1001$StoreID <- as.numeric(pd1001$StoreID <- "1" )
+#pd1001$ProductCode <- as.numeric(pd1001$ProductCode <- "1001")
+#unique(pd1001$ProductType)
+#pd1001$ProductType <- as.factor(pd1001$ProductType <- "Perishable")
+#str(pd1001)
+#
+#alldates <- data.table(Date=seq.Date(min(pd1002$Date), max(pd1002$Date), by="day"))
+#pd1002 <- merge(pd1002, alldates, by="Date", all=TRUE)
+#pd1002$StoreID <- (pd1002$StoreID <- "1" )
+#pd1002$StoreID <- (pd1002$ProductCode <- "1002")
+#pd1002$ProductType <- as.factor(pd1002$ProductType <- "Perishable")
+#
+#alldates <- data.table(Date=seq.Date(min(pd1003$Date), max(pd1003$Date), by="day"))
+#pd1003 <- merge(pd1003, alldates, by="Date", all=TRUE)
+#pd1003$StoreID <- (pd1003$StoreID <- "1" )
+#pd1003$StoreID <- (pd1003$ProductCode <- "1003")
+#pd1003$ProductType <- as.factor(pd1003$ProductType <- "Perishable")
+#
+###########CODE FOR LATER USE########################
+#
+#alldates <- data.table(Date=seq.Date(min(pd1004$Date), max(pd1004$Date), by="day"))
+#pd1004 <- merge(pd1004, alldates, by="Date", all=TRUE)
+#pd1004$StoreID <- (pd1004$StoreID <- "1" )
+#pd1004$StoreID <- (pd1004$ProductCode <- "1004")
+#
+#alldates <- data.table(Date=seq.Date(min(pd1007$Date), max(pd1007$Date), by="day"))
+#pd1007 <- merge(pd1007, alldates, by="Date", all=TRUE)
+#pd1007$StoreID <- (pd1007$StoreID <- "1" )
+#pd1007$StoreID <- (pd1007$ProductCode <- "1007")
+#
+#########################################################################
+
+#Impute missing data
+#for prod code 1001 -- pd1001
+#Plot missing values and assign using locf
+#missmap(pd1001, main = "Missing values vs observed")
+#md.pattern(pd1001)
+#pd1001 <- na.locf(pd1001)
+#
+#
+##for prod code 1002 -- pd1002
+##plot missing values and assign using MICE approach
+#
+#md.pattern(pd1002)
+#missmap(pd1002, main = "Missing values vs observed")
+#sum(is.na(pd1002))
+#
+#pd1002cat <- subset(pd1002, select= c("Date", "ProductType")) # separate categorical variables
+#pd1002 <- subset(pd1002, select=-c(Date, ProductType))
+#tempData <- mice(pd1002,m=5,maxit=50,meth='pmm',seed=500)
+#summary(tempData)
+#completeddata <- complete(tempData,1)  #convert to df select first iteration
+#densityplot(tempData)
+#pd1002 <-data.frame(completeddata,pd1002cat) #final DF
+#
+##for prod code 1003 -- pd1003
+##plot missing values and assign using LOCF approach
+#
+#missmap(pd1003, main = "Missing values vs observed")
+#md.pattern(pd1003)
+#sum(is.na(pd1003))
+#pd1003 <- na.locf(pd1003)
+#
+#
+
+############################################################################################
+#cODE FOR FUNCTIONS
+
+AggregationFunction <- function(x1) {
+  x2 <- data.frame()
+  day = ymd(x1$Date)
+  mth = month(day)
+  yr = year(day)
+  wk = week(day)
+  x2 <- data.frame("AQuantity"=x1$Quantity,wk,yr)
+  x2 <- aggregate(AQuantity ~ wk + yr, x2, sum)
+  return(x2)
+  
+}
+
+
+MissWeek <- function(x1) {
+  
+  Weeklist=seq(from = 1, to = 53, by =1)
+  Status = setdiff(Weeklist,x1$wk)
+  return(Status)
+  
+}
+
+
+SimpleModelFunction <- function(x) {
+  sma_pd1001 = SMA(x,n=5)
+  wma_pd1001 = WMA(x,n=5)
+  ema_pd1001 = EMA(x,n=5) 
+  
+  sma_actuals <- x[5:170]
+  sma_preds <- sma_pd1001[5:170]
+  smaerrors <- regr.eval(trues = sma_actuals, preds = sma_preds)
+  
+  wma_actuals <- x[5:170]
+  wma_preds <- wma_pd1001[5:170]
+  wmaerrors <- regr.eval(trues = wma_actuals, preds = wma_preds)
+  
+  ema_actuals <- x[5:170]
+  ema_preds <- ema_pd1001[5:170]
+  emaerrors <- regr.eval(trues = ema_actuals, preds = ema_preds)
+  
+  
+  Errors <- list(smaerrors,wmaerrors,emaerrors )
+  return(Errors)
+}
+
+############################################################################################
+#cODE FOR FEATURES
+
+#Features
+
+weatherdata <- read.csv("WeatherData.csv",header= T, sep = ",")
+holidaydata <- read.csv("HolidayData.csv",header= T, sep = ",")
+
+
+str(weatherdata)
+str(holidaydata)
+
+weatherdata$Date <- format(as.Date(weatherdata$Date, format = "%m/%d/%Y"), "%Y-%m-%d") 
+holidaydata$Date <- format(as.Date(holidaydata$Date, format = "%Y-%m-%d"))
+
+holidaydata <- holidaydata[
+  with(holidaydata, order(Date)),
+  ]
+
+weatherdata <- weatherdata[
+  with(weatherdata, order(Date)),
+  ]
+
+
+range(holidaydata$Date)
+range(weatherdata$Date)
+
+features <- merge(weatherdata, holidaydata, by.x = "Date", by.y = "Date", all.x = TRUE)
+
+str(features)
+range(features$Date)
+
+features<-features[-9]
+
+#Introduce weekcolumn
+
+day = ymd(features$Date)
+mth = month(day)
+yr = year(day)
+wk = week(day)
+
+
+str(features)
+features$week <- wk
+features$year <- yr
+
+# Group the data by week and year and considering the mean value of quantity
+features2 <- setDT(features)[, lapply(.SD, sum), by=.(week, year), .SDcols=c("fog", "rain", "snow", "hail", "thunder", "tornado", "WeekEnd", 
+                                                                             "Holiday", "LongVacation", "HighSales")]
+
+features3 <- setDT(features)[, lapply(.SD, sum), by=.(week, year), .SDcols=c("Mean.TemperatureC")]
+FinalFeatures <- data.frame(features2,features3$Mean.TemperatureC)
+
+#Impute the NAs with 0 
+
+FinalFeatures[is.na(FinalFeatures)] <- 0
+
+#removing HAIL as it has only 0s
+unique(ModelFeature$hail)
+FinalFeatures <- FinalFeatures[-6]
+ModelFeature <- head(FinalFeatures,-6)
+PredictFeature <- tail(FinalFeatures,6)
+
+unique(FinalFeatures[c("fog", "rain", "snow", "hail", "thunder", "tornado", "WeekEnd", 
+                       "Holiday", "LongVacation", "HighSales")])
+
+
+
+
+PredictFeature <- PredictFeature[c(1,2),]
+str(ModelFeature)
+str(PredictFeature)
+
+
+##############################SLIDING WINDOW REGRESSOR####################################
+
+
+SlidingModelFeature <- head(FinalFeatures,159)
+SlidingPredictFeature <- FinalFeatures[c(160,161),]
+
+
+
+############################################################################################
+#CODE FOR SIMPLE MODELS
+
+SimpleModelError1001 <- SimpleModelFunction(pd1001ts)
+SimpleModelError1002 <- SimpleModelFunction(pd1002ts)
+SimpleModelError1003 <- SimpleModelFunction(pd1003ts)
+SimpleModelError1004 <- SimpleModelFunction(pd1004ts)
+SimpleModelError1005 <- SimpleModelFunction(pd1005ts)
+SimpleModelError1006 <- SimpleModelFunction(pd1006ts)
+
+SimpleModelError1008 <- SimpleModelFunction(pd1008ts)
+SimpleModelError1009 <- SimpleModelFunction(pd1009ts)
+SimpleModelError1010 <- SimpleModelFunction(pd1010ts)
+SimpleModelError1011 <- SimpleModelFunction(pd1011ts)
+SimpleModelError1012 <- SimpleModelFunction(pd1012ts)
+SimpleModelError1013 <- SimpleModelFunction(pd1013ts)
+SimpleModelError1014 <- SimpleModelFunction(pd1014ts)
+SimpleModelError1015 <- SimpleModelFunction(pd1015ts)
+
+SimpleModelError1001
+
+SimpleModelError1003
+SimpleModelError1004
+SimpleModelError1005
+SimpleModelError1006
+
+SimpleModelError1008
+SimpleModelError1009
+SimpleModelError1010
+SimpleModelError1011
+SimpleModelError1012
+SimpleModelError1013
+SimpleModelError1014
+SimpleModelError1015
+
+############################################################################################
+#CODE FOR MODELS FROM 1001-  1007
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1001
+###################################################################################################
+#PD1001 ANALYSIS AND MODEL BUILDING
+#
+#read the dataset as time serie sobject
+#pd1001ts = ts(pd1001ag$AQuantity, start = c(2014,1), frequency = 53)
+#plot(pd1001ts)
+#
+
+pd1001sl <- head(pd1001ag,170)
+pd1001ts = ts(pd1001sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1001ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+
+decomposed_pd1001ts = decompose(pd1001ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1001ts, col = "blue" )
+
+#Study ACF, PACF plots to find auto and partial auto correlations manually and check if data
+#has predominant trend and seasonal components
+
+par(mfrow=c(1,2))
+acf(pd1001ts)
+
+pacf(pd1001ts)
+
+
+
+##The time series shows significant downward trend and also seasonality with peaks at the
+#end of each year
+##Using HoltWinter with alpha beta and gamma as true
+
+#HOLTWINTERS
+
+par(mfrow=c(1,3))
+sma_pd1001 = SMA(pd1001ts,n=5)
+wma_pd1001 = WMA(pd1001ts,n=5)
+ema_pd1001 = EMA(pd1001ts,n=5)
+par(mfrow=c(1,1))
+plot(pd1001ts,type = 'l', col = "black")
+par(new=TRUE)
+plot(sma_pd1001,type = 'l', col = "blue")
+par(new=TRUE)
+plot(wma_pd1001,type = 'l', col = "red")
+par(new=TRUE)
+plot(ema_pd1001,type = 'l', col = "green")
+
+#Calculating errors on the averaging models
+errorsma = mean(abs(pd1001ts[7:170]-sma_pd1001[7:170]))
+errorwma = mean(abs(pd1001ts[7:170]-wma_pd1001[7:170]))
+errorema = mean(abs(pd1001ts[7:170]-ema_pd1001[7:170]))
+errorsma
+errorwma
+errorema
+
+
+
+
+
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1001ts = decompose(pd1001ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1001ts, col = "blue" )
+
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1001_HW = HoltWinters(pd1001ts)
+plot(pd1001ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1001_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1001_hw_forecasts = forecast(pd1001_HW,h=2)
+hw_preds <- data.frame(pd1001_hw_forecasts)$Point.Forecast
+plot(pd1001_hw_forecasts)
+hw_actuals <- pd1001ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1001_hw_forecasts)
+
+
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1001ts,stepwise = TRUE, approximation = TRUE)
+
+pd1001autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1001ag$AQuantity[171:172]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1001ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1001ag$AQuantity[171:172]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1002
+#
+
+#Aggregating the dataset weekwise
+
+pd1002ag <- AggregationFunction(pd1002)
+
+
+
+#Creating a Time series Object
+
+pd1002sl <- head(pd1002ag,170)
+
+pd1002ts = ts(pd1002sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1002ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1002ts = decompose(pd1002ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1002ts, col = "blue" )
+
+
+#Seasonality and declining trend
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1002_HW = HoltWinters(pd1002ts)
+plot(pd1002ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1002_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1002_hw_forecasts = forecast(pd1002_HW,h=2)
+hw_preds <- data.frame(pd1002_hw_forecasts)$Point.Forecast
+plot(pd1002_HW)
+hw_actuals <- pd1002ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1002_hw_forecasts)
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1002ts,stepwise = TRUE, approximation = TRUE)
+
+pd1002autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1002ag$AQuantity[171:172]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1002ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1002ag$AQuantity[171:172]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1004
+#
+
+#Aggregating the dataset weekwise
+
+pd1004ag <- AggregationFunction(pd1004)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1004ag)
+
+
+#Creating a Time series Object
+
+pd1004sl <- head(pd1004ag,170)
+
+pd1004ts = ts(pd1004sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1004ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1004ts = decompose(pd1004ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1004ts, col = "blue" )
+
+
+#Rising Trend and seasonlity
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1004_HW = HoltWinters(pd1004ts)
+plot(pd1004ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1004_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1004_hw_forecasts = forecast(pd1004_HW,h=2)
+hw_preds <- data.frame(pd1004_hw_forecasts)$Point.Forecast
+plot(pd1004_HW)
+hw_actuals <- pd1004ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1004_hw_forecasts)
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1004ts,stepwise = TRUE, approximation = TRUE)
+
+pd1004autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1004ag$AQuantity[171:172]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1004ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1004ag$AQuantity[171:172]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1003
+#
+##################################################################################################
+#PD1003 ANALYSIS AND MODEL BUILDING
+#
+#read the dataset as time serie sobject
+#pd1003ts = ts(pd1003ag$AQuantity, start = c(2014,1), frequency = 53)
+#plot(pd1003ts)
+#
+#Aggregating the dataset weekwise
+
+pd1003ag <- AggregationFunction(pd1003)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1003ag)
+
+
+#Creating a Time series Object
+
+pd1003sl <- head(pd1003ag,170)
+
+pd1003ts = ts(pd1003sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1003ts)
+par(mfrow=c(1,2))
+acf(pd1003ts)
+pacf(pd1003ts)
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1003ts = decompose(pd1003ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1003ts, col = "blue" )
+
+
+#Declining trend and sesonality
+
+par(mfrow=c(1,2))
+acf(pd1003ts)
+
+pacf(pd1003ts)
+
+
+
+par(mfrow=c(1,3))
+sma_pd1003 = SMA(pd1003ts,n=6)
+wma_pd1003 = WMA(pd1003ts,n=6)
+ema_pd1003 = EMA(pd1003ts,n=6)
+par(mfrow=c(1,1))
+plot(pd1003ts,type = 'l', col = "black")
+par(new=TRUE)
+plot(sma_pd1003, col = "blue")
+par(new=TRUE)
+lines(wma_pd1003, col = "red")
+par(new=TRUE)
+lines(ema_pd1003, col = "green")
+
+
+
+
+#Calculating errors on the averaging models
+errorsma = mean(abs(pd1003ts[7:170]-sma_pd1003[7:170]))
+errorwma = mean(abs(pd1003ts[7:170]-wma_pd1003[7:170]))
+errorema = mean(abs(pd1003ts[7:170]-ema_pd1003[7:170]))
+errorsma
+errorwma
+errorema
+
+
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1003_HW = HoltWinters(pd1003ts)
+plot(pd1003ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1003_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1003_hw_forecasts = forecast(pd1003_HW,h=2)
+hw_preds <- data.frame(pd1003_hw_forecasts)$Point.Forecast
+plot(pd1003_HW)
+plot(pd1003_hw_forecasts)
+hw_actuals <- pd1003ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1003_hw_forecasts)
+
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1003ts,stepwise = TRUE, approximation = TRUE)
+
+pd1003autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1003ag$AQuantity[171:172]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1003ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1003ag$AQuantity[171:172]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1005
+#
+##################################################################################################
+#PD1005 ANALYSIS AND MODEL BUILDING
+#
+#read the dataset as time serie sobject
+#pd1005ts = ts(pd1005ag$AQuantity, start = c(2014,1), frequency = 53)
+#plot(pd1005ts)
+#
+##AGGREGATING THE DATA BASED ON QUANTITY FOR DATASET pd1005
+#
+##for pd1005
+day = ymd(pd1005$Date)
+# Extracting month from date field
+mth = month(day)
+# Extracting year from date field
+yr = year(day)
+# Extracting week from date field
+wk = week(day)
+# Group the data by week and year and considering the mean value of quantity
+pd1005ag = data.frame("AQuantity"=pd1005$Quantity,wk,yr)
+pd1005ag = aggregate(AQuantity ~ wk + yr, pd1005ag, sum)
+pd1005sl <- head(pd1005ag,170)
+
+Weeklist=seq(from = 1, to = 53, by =1)
+setdiff(Weeklist,pd1005ag$wk)
+
+
+
+pd1005ts = ts(pd1005sl$AQuantity, start = c(2014,1), frequency = 53)
+plot.ts(pd1005ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1005ts = decompose(pd1005ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1005ts, col = "blue" )
+
+
+#Declining trend and sesonality
+
+par(mfrow=c(1,2))
+acf(pd1005ts)
+
+pacf(pd1005ts)
+
+
+par(mfrow=c(1,3))
+sma_pd1005 = SMA(pd1005ts,n=6)
+wma_pd1005 = WMA(pd1005ts,n=6)
+ema_pd1005 = EMA(pd1005ts,n=6)
+par(mfrow=c(1,1))
+plot(pd1005ts,type = 'l', col = "black")
+par(new=TRUE)
+plot(sma_pd1005, type = 'l',col = "blue")
+par(new=TRUE)
+lines(wma_pd1005, type = 'l',col = "red")
+par(new=TRUE)
+lines(ema_pd1005, type = 'l',col = "green")
+
+
+
+
+#Calculating errors on the averaging models
+errorsma = mean(abs(pd1005ts[7:170]-sma_pd1005[7:170]))
+errorwma = mean(abs(pd1005ts[7:170]-wma_pd1005[7:170]))
+errorema = mean(abs(pd1005ts[7:170]-ema_pd1005[7:170]))
+errorsma
+errorwma
+errorema
+
+pd1005_HW = HoltWinters(pd1005ts)
+plot(pd1005ts,type = 'l', col = "black")
+par(new=TRUE)
+plot(pd1005_HW$call, col="blue")
+pd1005_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1005_hw_forecasts = forecast(pd1005_HW,h=2)
+hw_preds <- data.frame(pd1005_hw_forecasts)$Point.Forecast
+plot(pd1005_HW)
+plot(pd1005_hw_forecasts)
+hw_actuals <- pd1005ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+range(pd1005ag$AQuantity)
+
+plot.forecast(pd1005_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1005ts,stepwise = TRUE, approximation = TRUE)
+
+pd1005autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1005ag$AQuantity[171:172]
+#Error
+
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+
+##############################################################################################
+#
+#ARIMAX MODELS
+
+autoArimaModel <- auto.arima(pd1005ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+plot(preds,l)
+actuals <- pd1005ag$AQuantity[171:172]
+
+#Error
+
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1006
+#
+
+#Aggregating the dataset weekwise
+
+pd1006ag <- AggregationFunction(pd1006)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1006ag)
+
+
+#Creating a Time series Object
+
+pd1006sl <- head(pd1006ag,170)
+
+pd1006ts = ts(pd1006sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1006ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1006ts = decompose(pd1006ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1006ts, col = "blue" )
+
+#We can observe seasonality and trend
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1006_HW = HoltWinters(pd1006ts)
+plot(pd1006ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1006_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1006_hw_forecasts = forecast(pd1006_HW,h=2)
+hw_preds <- data.frame(pd1006_hw_forecasts)$Point.Forecast
+plot(pd1006_HW)
+hw_actuals <- pd1006ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+range(pd1006ag$AQuantity)
+
+plot.forecast(pd1006_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1006ts,stepwise = TRUE, approximation = TRUE)
+
+pd1006autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1006ag$AQuantity[171:172]
+#Error
+
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODELS
+
+autoArimaModel <- auto.arima(pd1006ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1006ag$AQuantity[171:172]
+
+#Error
+
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1007
+#
+
+#Aggregating the dataset weekwise
+
+pd1007ag <- AggregationFunction(pd1007)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1007ag)
+
+
+#Creating a Time series Object
+
+pd1007sl <- head(pd1007ag,69)
+
+pd1007ts = ts(pd1007sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1007ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1007ts = decompose(pd1007ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1007ts, col = "blue" )
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1007_HW = HoltWinters(pd1007ts)
+plot(pd1007ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1007_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1007_hw_forecasts = forecast(pd1007_HW,h=2)
+hw_preds <- data.frame(pd1007_hw_forecasts)$Point.Forecast
+plot(pd1007_HW)
+hw_actuals <- pd1007ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1007_hw_forecasts)
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1007ts,stepwise = TRUE, approximation = TRUE)
+
+pd1007autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1007ag$AQuantity[70:71]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+
+
+ModelFeature1007 <- head(FinalFeatures,-107)
+PredictFeature1007 <- FinalFeatures[c(70,71),]
+unique(ModelFeature1007$fog)
+str(ModelFeature1007)
+autoArimaModel <- auto.arima(pd1007ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature1007)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1007ag$AQuantity[171:172]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+
+##############################################################################################
+##############################################################################################
+#SLIDING WINDOW TEST FOR 1001 - 1007
+
+#In this test we go back from 172 weeks to 159 i.e the last week of dec and make predictions for
+#the first two weeks of January
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1001
+###################################################################################################
+#PD1001 ANALYSIS AND MODEL BUILDING
+#
+
+#
+#Aggregating the dataset weekwise
+
+pd1001ag <- AggregationFunction(pd1001)
+pd1001slice <- head(pd1001ag,159)
+pd1001ts = ts(pd1001slice$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1001ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+
+decomposed_pd1001ts = decompose(pd1001ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1001ts, col = "blue" )
+
+#Study ACF, PACF plots to find auto and partial auto correlations manually and check if data
+#has predominant trend and seasonal components
+
+par(mfrow=c(1,2))
+acf(pd1001ts)
+
+pacf(pd1001ts)
+
+
+
+##The time series shows significant downward trend and also seasonality with peaks at the
+#end of each year
+##Using HoltWinter with alpha beta and gamma as true
+
+#HOLTWINTERS
+
+par(mfrow=c(1,3))
+sma_pd1001 = SMA(pd1001ts,n=5)
+wma_pd1001 = WMA(pd1001ts,n=5)
+ema_pd1001 = EMA(pd1001ts,n=5)
+par(mfrow=c(1,1))
+plot(pd1001ts,type = 'l', col = "black")
+par(new=TRUE)
+plot(sma_pd1001,type = 'l', col = "blue")
+par(new=TRUE)
+plot(wma_pd1001,type = 'l', col = "red")
+par(new=TRUE)
+plot(ema_pd1001,type = 'l', col = "green")
+
+#Calculating errors on the averaging models
+errorsma = mean(abs(pd1001ts[7:170]-sma_pd1001[7:170]))
+errorwma = mean(abs(pd1001ts[7:170]-wma_pd1001[7:170]))
+errorema = mean(abs(pd1001ts[7:170]-ema_pd1001[7:170]))
+errorsma
+errorwma
+errorema
+
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1001ts = decompose(pd1001ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1001ts, col = "blue" )
+
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1001_HW = HoltWinters(pd1001ts)
+plot(pd1001ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1001_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1001_hw_forecasts = forecast(pd1001_HW,h=2)
+hw_preds <- data.frame(pd1001_hw_forecasts)$Point.Forecast
+plot(pd1001_HW)
+hw_actuals <- pd1001ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1001_hw_forecasts)
+
+
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1001ts,stepwise = TRUE, approximation = TRUE)
+
+pd1001autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1001ag$AQuantity[160:161]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1001ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1001ag$AQuantity[160:161]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1002
+#
+
+#Aggregating the dataset weekwise
+
+pd1002ag <- AggregationFunction(pd1002)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1002ag)
+
+
+#Creating a Time series Object
+
+pd1002slice <- head(pd1002ag,159)
+
+pd1002ts = ts(pd1002slice$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1002ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1002ts = decompose(pd1002ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1002ts, col = "blue" )
+
+
+#Seasonality and declining trend
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1002_HW = HoltWinters(pd1002ts)
+plot(pd1002ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1002_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1002_hw_forecasts = forecast(pd1002_HW,h=2)
+hw_preds <- data.frame(pd1002_hw_forecasts)$Point.Forecast
+plot(pd1002_HW)
+hw_actuals <- pd1002ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1002_hw_forecasts)
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1002ts,stepwise = TRUE, approximation = TRUE)
+
+pd1002autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1002ag$AQuantity[160:161]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1002ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1002ag$AQuantity[160:161]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1004
+#
+
+#Aggregating the dataset weekwise
+
+pd1004ag <- AggregationFunction(pd1004)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1004ag)
+
+
+#Creating a Time series Object
+
+pd1004sl <- head(pd1004ag,159)
+
+pd1004ts = ts(pd1004sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1004ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1004ts = decompose(pd1004ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1004ts, col = "blue" )
+
+
+#Rising Trend and seasonlity
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1004_HW = HoltWinters(pd1004ts)
+plot(pd1004ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1004_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1004_hw_forecasts = forecast(pd1004_HW,h=2)
+hw_preds <- data.frame(pd1004_hw_forecasts)$Point.Forecast
+plot(pd1004_HW)
+hw_actuals <- pd1004ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1004_hw_forecasts)
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1004ts,stepwise = TRUE, approximation = TRUE)
+
+pd1004autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1004ag$AQuantity[160:161]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1004ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1004ag$AQuantity[160:161]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1003
+#
+##################################################################################################
+#PD1003 ANALYSIS AND MODEL BUILDING
+#
+#read the dataset as time serie sobject
+#pd1003ts = ts(pd1003ag$AQuantity, start = c(2014,1), frequency = 53)
+#plot(pd1003ts)
+#
+#Aggregating the dataset weekwise
+
+pd1003ag <- AggregationFunction(pd1003)
+
+
+#Creating a Time series Object
+
+pd1003slice <- head(pd1003ag,159)
+
+pd1003ts = ts(pd1003slice$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1003ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1003ts = decompose(pd1003ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1003ts, col = "blue" )
+
+#Declining trend and sesonality
+
+par(mfrow=c(1,2))
+acf(pd1003ts)
+
+pacf(pd1003ts)
+
+
+
+par(mfrow=c(1,3))
+sma_pd1003 = SMA(pd1003ts,n=6)
+wma_pd1003 = WMA(pd1003ts,n=6)
+ema_pd1003 = EMA(pd1003ts,n=6)
+par(mfrow=c(1,1))
+plot(pd1003ts,type = 'l', col = "black")
+par(new=TRUE)
+plot(sma_pd1003, col = "blue")
+par(new=TRUE)
+lines(wma_pd1003, col = "red")
+par(new=TRUE)
+lines(ema_pd1003, col = "green")
+
+
+
+
+#Calculating errors on the averaging models
+errorsma = mean(abs(pd1003ts[6:170]-sma_pd1003[6:170]))
+errorwma = mean(abs(pd1003ts[6:170]-wma_pd1003[6:170]))
+errorema = mean(abs(pd1003ts[6:170]-ema_pd1003[6:170]))
+errorsma
+errorwma
+errorema
+
+
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1003_HW = HoltWinters(pd1003ts)
+plot(pd1003ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1003_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1003_hw_forecasts = forecast(pd1003_HW,h=2)
+hw_preds <- data.frame(pd1003_hw_forecasts)$Point.Forecast
+plot(pd1003_HW)
+hw_actuals <- pd1003ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1003_hw_forecasts)
+
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1003ts,stepwise = TRUE, approximation = TRUE)
+
+pd1003autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1003ag$AQuantity[160:161]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1003ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1003ag$AQuantity[160:161]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1005
+#
+##################################################################################################
+#PD1005 ANALYSIS AND MODEL BUILDING
+
+#
+##AGGREGATING THE DATA BASED ON QUANTITY FOR DATASET pd1005
+#
+##for pd1005
+day = ymd(pd1005$Date)
+# Extracting month from date field
+mth = month(day)
+# Extracting year from date field
+yr = year(day)
+# Extracting week from date field
+wk = week(day)
+# Group the data by week and year and considering the mean value of quantity
+pd1005ag = data.frame("AQuantity"=pd1005$Quantity,wk,yr)
+pd1005ag = aggregate(AQuantity ~ wk + yr, pd1005ag, sum)
+pd1005slice <- head(pd1005ag,159)
+
+Weeklist=seq(from = 1, to = 53, by =1)
+setdiff(Weeklist,pd1005ag$wk)
+
+
+
+pd1005ts = ts(pd1005slice$AQuantity, start = c(2014,1), frequency = 53)
+plot.ts(pd1005ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1005ts = decompose(pd1005ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1005ts, col = "blue" )
+
+
+
+par(mfrow=c(1,3))
+sma_pd1005 = SMA(pd1005ts,n=6)
+wma_pd1005 = WMA(pd1005ts,n=6)
+ema_pd1005 = EMA(pd1005ts,n=6)
+par(mfrow=c(1,1))
+plot(pd1005ts,type = 'l', col = "black")
+par(new=TRUE)
+plot(sma_pd1005, type = 'l',col = "blue")
+par(new=TRUE)
+lines(wma_pd1005, type = 'l',col = "red")
+par(new=TRUE)
+lines(ema_pd1005, type = 'l',col = "green")
+
+
+
+
+#Calculating errors on the averaging models
+errorsma = mean(abs(pd1005ts[6:170]-sma_pd1005[6:170]))
+errorwma = mean(abs(pd1005ts[6:170]-wma_pd1005[6:174]))
+errorema = mean(abs(pd1005ts[6:170]-ema_pd1005[6:170]))
+errorsma
+errorwma
+errorema
+
+pd1005_HW = HoltWinters(pd1005ts)
+plot(pd1005ts,type = 'l', col = "black")
+par(new=TRUE)
+plot(pd1005_HW$call, col="blue")
+pd1005_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1005_hw_forecasts = forecast(pd1005_HW,h=2)
+hw_preds <- data.frame(pd1005_hw_forecasts)$Point.Forecast
+plot(pd1005_HW)
+hw_actuals <- pd1005ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+range(pd1005ag$AQuantity)
+
+plot.forecast(pd1005_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1005ts,stepwise = TRUE, approximation = TRUE)
+
+pd1005autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1005ag$AQuantity[160:161]
+#Error
+
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+
+##############################################################################################
+#
+#ARIMAX MODELS
+
+autoArimaModel <- auto.arima(pd1005ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1005ag$AQuantity[160:161]
+
+#Error
+
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1006
+#
+
+#Aggregating the dataset weekwise
+
+pd1006ag <- AggregationFunction(pd1006)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1006ag)
+
+
+#Creating a Time series Object
+
+pd1006sl <- head(pd1006ag,159)
+
+pd1006ts = ts(pd1006sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1006ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1006ts = decompose(pd1006ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1006ts, col = "blue" )
+
+#We can observe seasonality and trend
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1006_HW = HoltWinters(pd1006ts)
+plot(pd1006ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1006_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1006_hw_forecasts = forecast(pd1006_HW,h=2)
+hw_preds <- data.frame(pd1006_hw_forecasts)$Point.Forecast
+plot(pd1006_HW)
+hw_actuals <- pd1006ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+range(pd1006ag$AQuantity)
+
+plot.forecast(pd1006_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1006ts,stepwise = TRUE, approximation = TRUE)
+
+pd1006autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1006ag$AQuantity[160:161]
+#Error
+
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODELS
+
+autoArimaModel <- auto.arima(pd1006ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1006ag$AQuantity[160:161]
+
+#Error
+
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1007
+#
+
+#Aggregating the dataset weekwise
+
+pd1007ag <- AggregationFunction(pd1007)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1007ag)
+
+
+#Creating a Time series Object
+
+pd1007sl <- head(pd1007ag,69)
+
+pd1007ts = ts(pd1007sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1007ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1007ts = decompose(pd1007ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1007ts, col = "blue" )
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1007_HW = HoltWinters(pd1007ts)
+plot(pd1007ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1007_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1007_hw_forecasts = forecast(pd1007_HW,h=2)
+hw_preds <- data.frame(pd1007_hw_forecasts)$Point.Forecast
+plot(pd1007_HW)
+hw_actuals <- pd1007ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1007_hw_forecasts)
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1007ts,stepwise = TRUE, approximation = TRUE)
+
+pd1007autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1007ag$AQuantity[70:71]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+
+
+SlidingModelFeature1007 <- head(FinalFeatures,-107)
+SlidingPredictFeature1007 <- FinalFeatures[c(70,71),]
+unique(SlidingModelFeature1007$fog)
+str(SlidingModelFeature1007)
+autoArimaModel <- auto.arima(pd1007ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature1007)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1007ag$AQuantity[160:161]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1008
+#
+#Aggregating the dataset weekwise
+
+pd1008ag <- AggregationFunction(pd1008)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1008ag)
+
+
+#Creating a Time series Object
+
+pd1008sl <- head(pd1008ag,170)
+
+pd1008ts = ts(pd1008sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1008ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1008ts = decompose(pd1008ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1008ts, col = "blue" )
+
+#wE see seasonality and trend with both highs and lows
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1008_HW = HoltWinters(pd1008ts)
+plot(pd1008ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1008_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1008_hw_forecasts = forecast(pd1008_HW,h=2)
+hw_preds <- data.frame(pd1008_hw_forecasts)$Point.Forecast
+plot(pd1008_HW)
+hw_actuals <- pd1008ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1008_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1008ts,stepwise = TRUE, approximation = TRUE)
+
+pd1008autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1008ag$AQuantity[171:172]
+#Error
+
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODELS
+
+autoArimaModel <- auto.arima(pd1008ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1008ag$AQuantity[171:172]
+
+#Error
+
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1010
+#
+
+#Aggregating the dataset weekwise
+
+pd1010ag <- AggregationFunction(pd1010)
+
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1010ag)
+
+
+#Creating a Time series Object
+
+pd1010sl <- head(pd1010ag,170)
+
+pd1010ts = ts(pd1010sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1010ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1010ts = decompose(pd1010ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1010ts, col = "blue" )
+
+#Seasonality and declining trend is observed
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1010_HW = HoltWinters(pd1010ts)
+plot(pd1010ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1010_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1010_hw_forecasts = forecast(pd1010_HW,h=2)
+hw_preds <- data.frame(pd1010_hw_forecasts)$Point.Forecast
+plot(pd1010_HW)
+hw_actuals <- pd1010ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+range(pd1010ag$AQuantity)
+
+plot.forecast(pd1010_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1010ts,stepwise = TRUE, approximation = TRUE)
+
+pd1010autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1010ag$AQuantity[171:172]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODELS
+
+autoArimaModel <- auto.arima(pd1010ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1010ag$AQuantity[171:172]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1009
+#
+
+
+#Aggregating the dataset weekwise
+
+pd1009ag <- AggregationFunction(pd1009)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1009ag)
+
+
+#Creating a Time series Object
+
+pd1009sl <- head(pd1009ag,170)
+
+pd1009ts = ts(pd1009sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1009ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1009ts = decompose(pd1009ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1009ts, col = "blue" )
+
+#Declining trend and seasonlity is observed
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1009_HW = HoltWinters(pd1009ts)
+plot(pd1009ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1009_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1009_hw_forecasts = forecast(pd1009_HW,h=2)
+hw_preds <- data.frame(pd1009_hw_forecasts)$Point.Forecast
+plot(pd1009_HW)
+hw_actuals <- pd1009ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+range(pd1009ag$AQuantity)
+
+plot.forecast(pd1009_hw_forecasts)
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1009ts,stepwise = TRUE, approximation = TRUE)
+
+pd1009autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1009ag$AQuantity[171:172]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1009ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1009ag$AQuantity[171:172]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1011
+#
+
+
+#Aggregating the dataset weekwise
+
+pd1011ag <- AggregationFunction(pd1011)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1011ag)
+
+
+#Creating a Time series Object
+
+pd1011sl <- head(pd1011ag,170)
+
+pd1011ts = ts(pd1011sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1011ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1011ts = decompose(pd1011ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1011ts, col = "blue" )
+
+#Rising Trend and seasonality
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1011_HW = HoltWinters(pd1011ts)
+plot(pd1011ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1011_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1011_hw_forecasts = forecast(pd1011_HW,h=2)
+hw_preds <- data.frame(pd1011_hw_forecasts)$Point.Forecast
+plot(pd1011_HW)
+hw_actuals <- pd1011ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1011_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1011ts,stepwise = TRUE, approximation = TRUE)
+
+pd1011autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1011ag$AQuantity[171:172]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1011ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1011ag$AQuantity[171:172]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1013
+#
+
+#Aggregating the dataset weekwise
+
+pd1013ag <- AggregationFunction(pd1013)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1013ag)
+
+
+#Creating a Time series Object
+
+pd1013sl <- head(pd1013ag,170)
+
+pd1013ts = ts(pd1013sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1013ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1013ts = decompose(pd1013ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1013ts, col = "blue" )
+
+#declining trend seasonlity is observed
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1013_HW = HoltWinters(pd1013ts)
+plot(pd1013ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1013_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1013_hw_forecasts = forecast(pd1013_HW,h=2)
+hw_preds <- data.frame(pd1013_hw_forecasts)$Point.Forecast
+plot(pd1013_HW)
+hw_actuals <- pd1013ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1013_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1013ts,stepwise = TRUE, approximation = TRUE)
+
+pd1013autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1013ag$AQuantity[171:172]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1013ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1013ag$AQuantity[171:172]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1014
+#
+
+#Aggregating the dataset weekwise
+
+pd1014ag <- AggregationFunction(pd1014)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1014ag)
+
+
+#Creating a Time series Object
+
+pd1014sl <- head(pd1014ag,170)
+
+pd1014ts = ts(pd1014sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1014ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1014ts = decompose(pd1014ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1014ts, col = "blue" )
+
+#Rising trend and dropping seasonlity
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1014_HW = HoltWinters(pd1014ts)
+plot(pd1014ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1014_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1014_hw_forecasts = forecast(pd1014_HW,h=2)
+hw_preds <- data.frame(pd1014_hw_forecasts)$Point.Forecast
+plot(pd1014_HW)
+hw_actuals <- pd1014ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1014_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1014ts,stepwise = TRUE, approximation = TRUE)
+
+pd1014autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1014ag$AQuantity[171:172]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1014ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1014ag$AQuantity[171:172]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1014
+#
+#Aggregating the dataset weekwise
+
+pd1015ag <- AggregationFunction(pd1015)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1015ag)
+
+
+#Creating a Time series Object
+
+pd1015sl <- head(pd1015ag,170)
+
+pd1015ts = ts(pd1015sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1015ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1015ts = decompose(pd1015ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1015ts, col = "blue" )
+
+
+#Declining trend and seasonlity
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1015_HW = HoltWinters(pd1015ts)
+plot(pd1015ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1015_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1015_hw_forecasts = forecast(pd1015_HW,h=2)
+hw_preds <- data.frame(pd1015_hw_forecasts)$Point.Forecast
+plot(pd1015_HW)
+hw_actuals <- pd1015ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1015_hw_forecasts)
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1015ts,stepwise = TRUE, approximation = TRUE)
+
+pd1015autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1015ag$AQuantity[171:172]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1015ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1015ag$AQuantity[171:172]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1012
+#
+#Imputing missing weeks and realted missing data
+
+
+alldates <- data.table(Date=seq.Date(min(pd1012$Date), max(pd1012$Date), by="day"))
+pd1012 <- merge(pd1012, alldates, by="Date", all=TRUE)
+pd1012$StoreID <- as.numeric(pd1012$StoreID <- "1" )
+pd1012$ProductCode <- as.numeric(pd1012$ProductCode <- "1012")
+unique(pd1012$ProductType)
+pd1012$ProductType <- as.factor(pd1012$ProductType <- "Perishable")
+str(pd1012)
+
+
+pd1012cat <- subset(pd1012, select= c("Date", "ProductType")) # separate categorical variables
+pd1012 <- subset(pd1012, select=-c(Date, ProductType))
+tempData <- mice(pd1012,m=5,maxit=50,meth='pmm',seed=500)
+summary(tempData)
+completeddata <- complete(tempData,1)  #convert to df select first iteration
+densityplot(tempData)
+pd1012 <-data.frame(completeddata,pd1012cat) #final DF
+
+
+#Aggregating the dataset weekwise
+
+pd1012ag <- AggregationFunction(pd1012)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1012ag)
+
+
+#Creating a Time series Object
+
+pd1012sl <- head(pd1012ag,170)
+
+pd1012ts = ts(pd1012sl$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1012ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1012ts = decompose(pd1012ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1012ts, col = "blue" )
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1012_HW = HoltWinters(pd1012ts)
+plot(pd1012ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1012_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1012_hw_forecasts = forecast(pd1012_HW,h=2)
+hw_preds <- data.frame(pd1012_hw_forecasts)$Point.Forecast
+plot(pd1012_HW)
+hw_actuals <- pd1012ag$AQuantity[171:172]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1012_hw_forecasts)
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1012ts,stepwise = TRUE, approximation = TRUE)
+
+pd1012autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1012ag$AQuantity[171:172]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1012ts,stepwise = TRUE, approximation = TRUE, xreg = ModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=PredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1012ag$AQuantity[171:172]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+
+
+
+
+##############################################################################################
+
+##############################################################################################
+##############################################################################################
+#SLIDING WINDOW TEST FOR 1008 - 1015
+
+#In this test we go back from 172 weeks to 159 i.e the last week of dec and make predictions for
+#the first two weeks of January
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1008
+#
+##############################################################################################
+#Aggregating the dataset weekwise
+
+pd1008ag <- AggregationFunction(pd1008)
+
+
+
+
+#Creating a Time series Object
+
+pd1008slice <- head(pd1008ag,159)
+
+pd1008ts = ts(pd1008slice$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1008ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1008ts = decompose(pd1008ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1008ts, col = "blue" )
+
+#wE see seasonality and trend with both highs and lows
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1008_HW = HoltWinters(pd1008ts)
+plot(pd1008ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1008_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1008_hw_forecasts = forecast(pd1008_HW,h=2)
+hw_preds <- data.frame(pd1008_hw_forecasts)$Point.Forecast
+plot(pd1008_HW)
+hw_actuals <- pd1008ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1008_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1008ts,stepwise = TRUE, approximation = TRUE)
+
+pd1008autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1008ag$AQuantity[160:161]
+#Error
+
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODELS
+
+autoArimaModel <- auto.arima(pd1008ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1008ag$AQuantity[160:161]
+
+#Error
+
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1010
+#
+
+#Aggregating the dataset weekwise
+
+pd1010ag <- AggregationFunction(pd1010)
+
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1010ag)
+
+
+#Creating a Time series Object
+
+pd1010slice <- head(pd1010ag,159)
+
+pd1010ts = ts(pd1010slice$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1010ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1010ts = decompose(pd1010ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1010ts, col = "blue" )
+
+#Seasonality and declining trend is observed
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1010_HW = HoltWinters(pd1010ts)
+plot(pd1010ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1010_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1010_hw_forecasts = forecast(pd1010_HW,h=2)
+hw_preds <- data.frame(pd1010_hw_forecasts)$Point.Forecast
+plot(pd1010_HW)
+hw_actuals <- pd1010ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+range(pd1010ag$AQuantity)
+
+plot.forecast(pd1010_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1010ts,stepwise = TRUE, approximation = TRUE)
+
+pd1010autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1010ag$AQuantity[160:161]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODELS
+
+autoArimaModel <- auto.arima(pd1010ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1010ag$AQuantity[160:161]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1009
+#
+
+
+#Aggregating the dataset weekwise
+
+pd1009ag <- AggregationFunction(pd1009)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1009ag)
+
+
+#Creating a Time series Object
+
+pd1009slice <- head(pd1009ag,159)
+
+pd1009ts = ts(pd1009slice$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1009ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1009ts = decompose(pd1009ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1009ts, col = "blue" )
+
+#Declining trend and seasonlity is observed
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1009_HW = HoltWinters(pd1009ts)
+plot(pd1009ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1009_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1009_hw_forecasts = forecast(pd1009_HW,h=2)
+hw_preds <- data.frame(pd1009_hw_forecasts)$Point.Forecast
+plot(pd1009_HW)
+hw_actuals <- pd1009ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+range(pd1009ag$AQuantity)
+
+plot.forecast(pd1009_hw_forecasts)
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1009ts,stepwise = TRUE, approximation = TRUE)
+
+pd1009autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1009ag$AQuantity[160:161]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1009ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1009ag$AQuantity[160:161]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1011
+#
+
+
+#Aggregating the dataset weekwise
+
+pd1011ag <- AggregationFunction(pd1011)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1011ag)
+
+
+#Creating a Time series Object
+
+pd1011slice <- head(pd1011ag,159)
+
+pd1011ts = ts(pd1011slice$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1011ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1011ts = decompose(pd1011ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1011ts, col = "blue" )
+
+#Rising Trend and seasonality
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1011_HW = HoltWinters(pd1011ts)
+plot(pd1011ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1011_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1011_hw_forecasts = forecast(pd1011_HW,h=2)
+hw_preds <- data.frame(pd1011_hw_forecasts)$Point.Forecast
+plot(pd1011_HW)
+hw_actuals <- pd1011ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1011_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1011ts,stepwise = TRUE, approximation = TRUE)
+
+pd1011autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1011ag$AQuantity[160:161]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1011ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1011ag$AQuantity[160:161]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1013
+#
+
+#Aggregating the dataset weekwise
+
+pd1013ag <- AggregationFunction(pd1013)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1013ag)
+
+
+#Creating a Time series Object
+
+pd1013slice <- head(pd1013ag,159)
+
+pd1013ts = ts(pd1013slice$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1013ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1013ts = decompose(pd1013ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1013ts, col = "blue" )
+
+#declining trend seasonlity is observed
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1013_HW = HoltWinters(pd1013ts)
+plot(pd1013ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1013_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1013_hw_forecasts = forecast(pd1013_HW,h=2)
+hw_preds <- data.frame(pd1013_hw_forecasts)$Point.Forecast
+plot(pd1013_HW)
+hw_actuals <- pd1013ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1013_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1013ts,stepwise = TRUE, approximation = TRUE)
+
+pd1013autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1013ag$AQuantity[160:161]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1013ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1013ag$AQuantity[160:161]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1014
+#
+
+#Aggregating the dataset weekwise
+
+pd1014ag <- AggregationFunction(pd1014)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1014ag)
+
+
+#Creating a Time series Object
+
+pd1014slice <- head(pd1014ag,159)
+
+pd1014ts = ts(pd1014slice$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1014ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1014ts = decompose(pd1014ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1014ts, col = "blue" )
+
+#Rising trend and dropping seasonlity
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1014_HW = HoltWinters(pd1014ts)
+plot(pd1014ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1014_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1014_hw_forecasts = forecast(pd1014_HW,h=2)
+hw_preds <- data.frame(pd1014_hw_forecasts)$Point.Forecast
+plot(pd1014_HW)
+hw_actuals <- pd1014ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1014_hw_forecasts)
+
+##############################################################################################
+#
+#AUTO ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1014ts,stepwise = TRUE, approximation = TRUE)
+
+pd1014autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1014ag$AQuantity[160:161]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1014ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1014ag$AQuantity[160:161]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1014
+#
+#Aggregating the dataset weekwise
+
+pd1015ag <- AggregationFunction(pd1015)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1015ag)
+
+
+#Creating a Time series Object
+
+pd1015slice <- head(pd1015ag,159)
+
+pd1015ts = ts(pd1015slice$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1015ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1015ts = decompose(pd1015ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1015ts, col = "blue" )
+
+
+#Declining trend and seasonlity
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1015_HW = HoltWinters(pd1015ts)
+plot(pd1015ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1015_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1015_hw_forecasts = forecast(pd1015_HW,h=2)
+hw_preds <- data.frame(pd1015_hw_forecasts)$Point.Forecast
+plot(pd1015_HW)
+hw_actuals <- pd1015ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1015_hw_forecasts)
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1015ts,stepwise = TRUE, approximation = TRUE)
+
+pd1015autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1015ag$AQuantity[160:161]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1015ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1015ag$AQuantity[160:161]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+##############################################################################################
+##############################################################################################
+#MODEL BUILDING FOR PRODUCT CODE 1012
+#
+#Imputing missing weeks and realted missing data
+
+
+alldates <- data.table(Date=seq.Date(min(pd1012$Date), max(pd1012$Date), by="day"))
+pd1012 <- merge(pd1012, alldates, by="Date", all=TRUE)
+pd1012$StoreID <- as.numeric(pd1012$StoreID <- "1" )
+pd1012$ProductCode <- as.numeric(pd1012$ProductCode <- "1012")
+unique(pd1012$ProductType)
+pd1012$ProductType <- as.factor(pd1012$ProductType <- "Perishable")
+str(pd1012)
+
+
+pd1012cat <- subset(pd1012, select= c("Date", "ProductType")) # separate categorical variables
+pd1012 <- subset(pd1012, select=-c(Date, ProductType))
+tempData <- mice(pd1012,m=5,maxit=50,meth='pmm',seed=500)
+summary(tempData)
+completeddata <- complete(tempData,1)  #convert to df select first iteration
+densityplot(tempData)
+pd1012 <-data.frame(completeddata,pd1012cat) #final DF
+
+
+#Aggregating the dataset weekwise
+
+pd1012ag <- AggregationFunction(pd1012)
+
+#Checking if there are any missing weeks
+
+MissWeek(pd1012ag)
+
+
+#Creating a Time series Object
+
+pd1012slice <- head(pd1012ag,159)
+
+pd1012ts = ts(pd1012slice$AQuantity, start = c(2014,1), frequency = 53)
+plot(pd1012ts)
+
+#Analyzing the properties of time series
+#Decompose the time series and plot the components
+decomposed_pd1012ts = decompose(pd1012ts)
+par(mfrow=c(1,1))
+plot(decomposed_pd1012ts, col = "blue" )
+
+##############################################################################################
+#
+#Holt_Winters Model
+
+pd1012_HW = HoltWinters(pd1012ts)
+plot(pd1012ts,type = 'l', col = "black")
+par(new=TRUE)
+
+pd1012_HW$SSE
+
+
+#Forecasting for last 2 time periods
+
+pd1012_hw_forecasts = forecast(pd1012_HW,h=2)
+hw_preds <- data.frame(pd1012_hw_forecasts)$Point.Forecast
+plot(pd1012_HW)
+hw_actuals <- pd1012ag$AQuantity[160:161]
+#Compute error between actual and predicted values
+
+regr.eval(trues = hw_actuals, preds = hw_preds)
+
+
+plot.forecast(pd1012_hw_forecasts)
+
+##############################################################################################
+#
+#ARIMA MODEL
+
+autoArimaModel <- auto.arima(pd1012ts,stepwise = TRUE, approximation = TRUE)
+
+pd1012autoarima_forecast <- data.frame(forecast(autoArimaModel,h=2))$Point.Forecast
+autoarima_forecast <- forecast.Arima(autoArimaModel,h=2)
+plot.forecast(autoarima_forecast)
+preds <- data.frame(autoarima_forecast)$Point.Forecast
+
+actuals <- pd1012ag$AQuantity[160:161]
+#Error
+
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(autoarima_forecast)
+
+##############################################################################################
+#
+#ARIMAX MODEL
+
+autoArimaModel <- auto.arima(pd1012ts,stepwise = TRUE, approximation = TRUE, xreg = SlidingModelFeature)
+
+Arimax_forecast <- forecast.Arima(autoArimaModel, xreg=SlidingPredictFeature)
+
+plot.forecast(Arimax_forecast)
+
+preds <- data.frame(Arimax_forecast)$Point.Forecast
+
+actuals <- pd1012ag$AQuantity[160:161]
+
+#Error
+regr.eval(trues = actuals, preds = preds)
+plot.forecast(Arimax_forecast)
+
+
+
+
+
+###############################################END OF CODE#########################
+##############################################################################################
+##############################################################################################
+
+
+
+
+
+
+
