@@ -1,0 +1,232 @@
+######################### CHURN PREDICTION ####################
+#
+# The data file contains 3 million rows and around 373 variables
+# This code Explores the data and makes necessary changes in terms of 
+# imputation scaling and categorical variables.
+#
+#
+########################################################
+## Installing required packages
+########################################################
+install.packages("taRifx")
+install.packages("RANN")
+install.packages("mltools")
+install.packages("mlr")
+install.packages("CatEncoders")
+library( taRifx )
+library(caret)
+library(RANN)
+library(dummies)
+library(data.table)
+library(mltools)
+library( mlr )
+library(CatEncoders)
+
+########################################################
+#Read the file and remove ID column
+########################################################
+setwd()
+origdata <- read.csv("train.csv", header = T)
+origdata<-origdata[-1]
+
+str(origdata)
+
+########################################################
+#Check the percentage of missing values in df and col wise 
+########################################################
+
+mean(is.na(origdata))
+colMeans(is.na(origdata))
+
+########################################################
+#Remove all columns that have only NAs
+########################################################
+
+!apply (is.na(origdata),2, all)
+
+unique(origdata$TL_PREM_CLOSED_PREVQ1)
+
+origdata <- origdata[, !apply(is.na(origdata), 2, all)]
+
+
+########################################################
+#Remove colmns with more than 90% NAs
+########################################################
+
+train <- origdata[, -which(colMeans(is.na(origdata)) > 0.9)]
+
+
+str(train)
+
+########################################################
+#Convert int columns to numeric 
+########################################################
+
+
+train <- japply( train, which(sapply(train, class)=="integer"), as.numeric )
+
+#Exploration
+
+unique(train$city)
+sum(is.na(train$ENGAGEMENT_TAG_prev1))
+
+########################################################
+#No NAs found in categorical variables
+########################################################
+
+sum(is.na(train))
+mean(is.na(train))
+
+unique(train$LAS_TAG_LIVE)
+sum(is.na(train$LAS_TAG_LIVE))
+
+########################################################
+#Imputing missing values using KNN.Also centering and scaling numerical columns
+########################################################
+
+
+preProcValues <- preProcess(train, method = c("knnImpute","center","scale"))
+
+
+perfecttrain <- predict(preProcValues, train)
+sum(is.na(perfecttrain))
+
+########################################################
+#Remove factors from Df and move to a diff df
+########################################################
+
+trainCat <- perfecttrain[ ,sapply(perfecttrain, is.factor)]
+
+Newtrain <- perfecttrain[, !sapply(perfecttrain, is.factor)]
+
+str(trainCat)
+
+
+unique(trainCat$Req_Resolved_PrevQ1)
+
+trainCat$Complaint_Resolved_PrevQ1 <- as.numeric(trainCat$Complaint_Resolved_PrevQ)
+trainCat$Query_Resolved_PrevQ1 <- as.numeric(trainCat$Query_Resolved_PrevQ1)
+trainCat$Req_Resolved_PrevQ1 <- as.numeric(trainCat$Req_Resolved_PrevQ1)
+
+unique(trainCat$RBI_Class_Audit)
+unique(trainCat$Charges_cnt_PrevQ1_N)
+
+########################################################
+# As the file is huge and we have computing constraints,
+# the dummy process is taken care of manually per variable
+########################################################
+
+#Dummy for RBI_Class_Audit
+
+trainCat <- cbind(trainCat, dummy(trainCat$RBI_Class_Audit, sep = "_"))
+colnames(trainCat) <- sub("trainCat", "RBI_Class_Audit_", colnames(trainCat))
+
+#Dummy for RBI_Class_Audit
+
+unique(trainCat$Charges_cnt_PrevQ1_N)
+trainCat <- cbind(trainCat, dummy(trainCat$Charges_cnt_PrevQ1_N, sep = "_"))
+colnames(trainCat) <- sub("trainCat", "Charges_cnt_PrevQ1_N", colnames(trainCat))
+
+#subset(df, select=-c(z,u))  deleting columns
+#RBI_Class_Audit, Charges_cnt_PrevQ1_N, gender_bin, FINAL_WORTH_prev1
+
+str(trainCat)
+#dummey for gender_bin
+
+unique(trainCat$gender_bin)
+trainCat <- cbind(trainCat, dummy(trainCat$gender_bin, sep = "_"))
+colnames(trainCat) <- sub("trainCat", "gender_bin", colnames(trainCat))
+
+#dummey for FINAL_WORTH_prev1
+unique(trainCat$FINAL_WORTH_prev1)
+trainCat <- cbind(trainCat, dummy(trainCat$FINAL_WORTH_prev1, sep = "_"))
+colnames(trainCat) <- sub("trainCat", "gender_bin", colnames(trainCat))
+
+str(trainCat)
+
+#dummey for ENGAGEMENT_TAG_prev1
+unique(trainCat$ENGAGEMENT_TAG_prev1)
+trainCat <- cbind(trainCat, dummy(trainCat$ENGAGEMENT_TAG_prev1, sep = "_"))
+colnames(trainCat) <- sub("trainCat", "ENGAGEMENT_TAG_prev1", colnames(trainCat))
+
+trainCat <- subset(trainCat, select=-c(ENGAGEMENT_TAG_prev1,gender_bin, Charges_cnt_PrevQ1_N,
+                                       RBI_Class_Audit, FINAL_WORTH_prev1))
+
+
+#dummey for OCCUP_ALL_NEW
+unique(trainCat$OCCUP_ALL_NEW)
+trainCat <- cbind(trainCat, dummy(trainCat$OCCUP_ALL_NEW, sep = "_"))
+colnames(trainCat) <- sub("trainCat", "OCCUP_ALL_NEW", colnames(trainCat))
+
+
+#dummey for HNW_CATEGORY
+unique(trainCat$HNW_CATEGORY)
+trainCat <- cbind(trainCat, dummy(trainCat$HNW_CATEGORY, sep = "_"))
+colnames(trainCat) <- sub("trainCat", "HNW_CATEGORY", colnames(trainCat))
+
+trainCat <- subset(trainCat, select=-c(OCCUP_ALL_NEW,HNW_CATEGORY))
+
+str(trainCat)
+
+unique(trainCat$city)
+#########################################################
+# There are 4k cityies in file, let us convert them to urban and non urban
+# urban - 1 non- urban - 0
+########################################################
+trainCat$city <- traincattable$city
+  
+trainCat$city <- ifelse( trainCat$city == as.character('HYDERABAD') | 
+          trainCat$city == as.character('BANGALORE') |
+            trainCat$city == as.character('LUCKNOW') |
+          trainCat$city == as.character('PUNE') |
+          trainCat$city == as.character('SECUNDERA') |
+          trainCat$city == as.character('CHENNAI') |
+          trainCat$city == as.character('Mumbai') |
+          trainCat$city == as.character('Gurgaon') ,1,0 ) 
+
+
+asNumeric <- function(x) as.numeric(as.character(x))
+factorsNumeric <- function(trainCat) modifyList(trainCat, 
+                                                lapply(trainCat[, sapply(trainCat, is.factor)],   
+                                                   asNumeric))
+
+trainCat$AL_TAG_LIVE <- ifelse(trainCat$AL_TAG_LIVE == 'Y',1,0)
+trainCat$AGRI_TAG_LIVE <- ifelse(trainCat$AGRI_TAG_LIVE == 'Y',1,0)
+trainCat$AL_CNC_TAG_LIVE <- ifelse(trainCat$AL_CNC_TAG_LIVE == 'Y',1,0)
+trainCat$AL_TAG_LIVE <- ifelse(trainCat$AL_TAG_LIVE == 'Y',1,0)
+trainCat$BL_TAG_LIVE <- ifelse(trainCat$BL_TAG_LIVE == 'Y',1,0)
+trainCat$CC_TAG_LIVE <- ifelse(trainCat$CC_TAG_LIVE == 'Y',1,0)
+trainCat$CE_TAG_LIVE <- ifelse(trainCat$CE_TAG_LIVE == 'Y',1,0)
+trainCat$CV_TAG_LIVE <- ifelse(trainCat$CV_TAG_LIVE == 'Y',1,0)
+trainCat$DEMAT_TAG_LIVE <- ifelse(trainCat$DEMAT_TAG_LIVE == 'Y',1,0)
+trainCat$EDU_TAG_LIVE <- ifelse(trainCat$EDU_TAG_LIVE == 'Y',1,0)
+trainCat$GL_TAG_LIVE <- ifelse(trainCat$GL_TAG_LIVE == 'Y',1,0)
+trainCat$HL_TAG_LIVE <- ifelse(trainCat$HL_TAG_LIVE == 'Y',1,0)
+trainCat$SEC_ACC_TAG_LIVE <- ifelse(trainCat$SEC_ACC_TAG_LIVE == 'Y',1,0)
+trainCat$INS_TAG_LIVE <- ifelse(trainCat$INS_TAG_LIVE == 'Y',1,0)
+trainCat$LAS_TAG_LIVE <- ifelse(trainCat$LAS_TAG_LIVE == 'Y',1,0)
+trainCat$MF_TAG_LIVE <- ifelse(trainCat$MF_TAG_LIVE == 'Y',1,0)
+trainCat$OTHER_LOANS_TAG_LIVE <- ifelse(trainCat$OTHER_LOANS_TAG_LIVE == 'Y',1,0)
+trainCat$PL_TAG_LIVE <- ifelse(trainCat$PL_TAG_LIVE == 'Y',1,0)
+trainCat$RD_TAG_LIVE <- ifelse(trainCat$RD_TAG_LIVE == 'Y',1,0)
+trainCat$FD_TAG_LIVE <- ifelse(trainCat$FD_TAG_LIVE == 'Y',1,0)
+trainCat$TL_TAG_LIVE <- ifelse(trainCat$TL_TAG_LIVE == 'Y',1,0)
+trainCat$TWL_TAG_LIVE <- ifelse(trainCat$TWL_TAG_LIVE == 'Y',1,0)
+trainCat$lap_tag_live <- ifelse(trainCat$lap_tag_live == 'Y',1,0)
+trainCat$Billpay_Active_PrevQ1_N <- ifelse(trainCat$Billpay_Active_PrevQ1_N == 'Y',1,0)
+trainCat$Billpay_Reg_ason_Prev1_N <- ifelse(trainCat$Billpay_Reg_ason_Prev1_N == 'Y',1,0)
+trainCat$FRX_PrevQ1_N <- ifelse(trainCat$FRX_PrevQ1_N == 'Y',1,0)
+trainCat$EMAIL_UNSUBSCRIBE <- ifelse(trainCat$EMAIL_UNSUBSCRIBE == 'Y',1,0)
+
+str(trainCat)
+trainCat <- japply( trainCat, which(sapply(trainCat, class)=="integer"), as.numeric )
+
+#########################################################
+#Join trainCat and perfecttrain and create final dataset
+########################################################
+
+finaltrain <- data.frame(trainCat, Newtrain)
+trainCat <- as.data.frame(trainCat)
+str(finaltrain$Responders)
+
+
